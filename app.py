@@ -1,58 +1,46 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import time
-import random
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-    "Mozilla/5.0 (X11; Linux x86_64)",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)"
-]
-
-def search_google(query, user_agent):
-    headers = {"User-Agent": user_agent}
-    url = f"https://www.google.com/search?q={query}&hl=en"
+# --- DuckDuckGo search function ---
+def duckduckgo_search(query):
+    url = f"https://html.duckduckgo.com/html/?q={query}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
 
         results = []
-        for g in soup.find_all('div', class_='tF2Cxc'):
-            title = g.find('h3')
-            link = g.find('a', href=True)
+        for result in soup.select(".result__title a"):
+            title = result.text.strip()
+            link = result.get("href")
             if title and link:
-                results.append({
-                    "title": title.text,
-                    "url": link['href']
-                })
+                results.append({"title": title, "url": link})
         return results
 
     except Exception as e:
-        st.warning(f"Search failed: {e}")
+        st.error(f"Search failed: {e}")
         return []
 
+# --- Streamlit UI ---
 def main():
-    st.title("🔍 Simple Google Search (No Proxy)")
+    st.set_page_config(page_title="DuckDuckGo Search", page_icon="🔍")
+    st.title("🔍 DuckDuckGo Web Search (No API Key Required)")
 
     query = st.text_input("Enter your search query:")
-    run = st.button("Search")
+    search_button = st.button("Search")
 
-    if run and query:
-        st.write(f"Searching Google for: **{query}**")
-        with st.spinner("Fetching results..."):
-            user_agent = random.choice(USER_AGENTS)
-            results = search_google(query, user_agent)
-            time.sleep(random.uniform(2.0, 4.0))  # avoid getting blocked
+    if search_button and query:
+        with st.spinner("Searching..."):
+            results = duckduckgo_search(query)
 
         if results:
-            st.success(f"Found {len(results)} results")
+            st.success(f"Found {len(results)} results:")
             for i, result in enumerate(results, 1):
                 st.markdown(f"**{i}. [{result['title']}]({result['url']})**")
         else:
-            st.warning("No results found or blocked by Google.")
+            st.warning("No results found.")
 
 if __name__ == "__main__":
     main()
