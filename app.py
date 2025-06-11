@@ -6,22 +6,30 @@ def duckduckgo_search(query):
     url = "https://html.duckduckgo.com/html/"
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        )
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "https://html.duckduckgo.com/html/",
     }
     data = {"q": query}
 
     try:
         res = requests.post(url, headers=headers, data=data, timeout=10)
+
+        if res.status_code != 200 or "captcha" in res.text.lower():
+            st.warning("Blocked by DuckDuckGo or CAPTCHA detected.")
+            return []
+
         soup = BeautifulSoup(res.text, "html.parser")
 
         results = []
-        for a in soup.select(".result__a"):
-            title = a.text.strip()
-            href = a["href"]
-            results.append({"title": title, "url": href})
+        for result in soup.select(".result__a"):
+            title = result.text.strip()
+            href = result.get("href")
+            if title and href:
+                results.append({"title": title, "url": href})
+
         return results
 
     except Exception as e:
