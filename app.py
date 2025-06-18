@@ -2,43 +2,66 @@ import streamlit as st
 from docx import Document
 import re
 from io import BytesIO
+from collections import Counter
 
-def extract_line_numbers(doc):
-    line_numbers = []
+def extract_lines(doc):
+    lines = []
     for para in doc.paragraphs:
-        match = re.match(r'^L(\d{1,3})', para.text.strip())
+        text = para.text.strip()
+        match = re.match(r'^L(\d{1,3})(:)?\s*(.*)', text)
         if match:
-            line_numbers.append(int(match.group(1)))
-    return sorted(set(line_numbers))
+            num = int(match.group(1))
+            rest = match.group(3)
+            lines.append((num, rest))
+    return lines
 
-def find_missing_numbers(line_numbers):
-    missing = []
-    if not line_numbers:
-        return missing
-    for expected in range(line_numbers[0], line_numbers[-1] + 1):
-        if expected not in line_numbers:
-            missing.append(expected)
-    return missing
+def find_missing_and_duplicates(numbers):
+    if not numbers:
+        return [], []
+    unique_numbers = sorted(set(numbers))
+    full_range = list(range(unique_numbers[0], unique_numbers[-1] + 1))
 
-def insert_missing_lines(doc, missing_numbers):
+    missing = [n for n in full_range if n not in numbers]
+    duplicates = [f"L{n}" for n, c in Counter(numbers).items() if c > 1]
+
+    return missing, duplicates
+
+def fix_doc(lines, fix_missing=True, fix_duplicates=True):
     new_doc = Document()
-    all_paragraphs = list(doc.paragraphs)
-    current_idx = 0
+    output_lines = []
+    used = set()
+    next_expected = lines[0][0]
 
-    for i in range(len(all_paragraphs)):
-        para = all_paragraphs[i]
-        match = re.match(r'^L(\d{1,3})', para.text.strip())
-        if match:
-            current_line_num = int(match.group(1))
-            while current_idx < len(missing_numbers) and missing_numbers[current_idx] < current_line_num:
-                new_doc.add_paragraph(f"L{missing_numbers[current_idx]}: << Missing Line >>")
-                current_idx += 1
-        new_doc.add_paragraph(para.text)
+    line_iter = iter(lines)
 
-    # Add any missing at the end
-    while current_idx < len(missing_numbers):
-        new_doc.add_paragraph(f"L{missing_numbers[current_idx]}: << Missing Line >>")
-        current_idx += 1
+    while True:
+        try:
+            num, content = next(line_iter)
+
+            # Insert missing lines
+            while fix_missing and next_expected < num:
+                output_lines.append((next_expected, "<< Missing Line >>"))
+                next_expected += 1
+
+            # Fix duplicates
+            if fix_duplicates and num in used:
+                # Assign the next available number
+                while next_expected in used:
+                    next_expected += 1
+                output_lines.append((next_expected, content))
+                used.add(next_expected)
+                next_expected += 1
+            else:
+                output_lines.append((num, content))
+                used.add(num)
+                next_expected = num + 1
+
+        except StopIteration:
+            break
+
+    # Write to docx
+    for num, content in output_lines:
+        new_doc.add_paragraph(f"L{num}: {content}")
 
     return new_doc
 
@@ -49,15 +72,17 @@ def generate_download_link(doc):
     return buffer
 
 def main():
-    st.title("📄 Line Number Checker & Auto-Fix for DOCX")
-    st.write("Upload a `.docx` file. We'll check for missing `L{number}` lines and optionally auto-fix them.")
+    st.title("📄 Line Number Checker & Auto-Fix")
+    st.write("Upload a `.docx` with `L{number}` lines. This app detects and optionally fixes skipped and duplicate numbers.")
 
-    uploaded_file = st.file_uploader("Upload a DOCX file", type="docx")
+    uploaded_file = st.file_uploader("Upload DOCX", type="docx")
 
     if uploaded_file:
-        doc = Document(uploaded_file)
-        line_numbers = extract_line_numbers(doc)
-        missing = find_missing_numbers(line_numbers)
+        original_doc = Document(uploaded_file)
+        lines = extract_lines(original_doc)
+        line_numbers = [num for num, _ in lines]
+
+        missing, duplicates = find_missing_and_duplicates(line_numbers)
 
         st.subheader("📋 Detected Line Numbers")
         st.write([f"L{n}" for n in line_numbers])
@@ -65,20 +90,30 @@ def main():
         if missing:
             st.subheader("❌ Missing Line Numbers")
             st.error(", ".join([f"L{m}" for m in missing]))
+        else:
+            st.success("✅ No missing line numbers!")
 
-            if st.button("🛠️ Auto-insert missing lines"):
-                fixed_doc = insert_missing_lines(doc, missing)
-                st.success("Missing lines inserted as placeholders.")
+        if duplicates:
+            st.subheader("⚠️ Duplicate Line Numbers")
+            st.warning(", ".join(duplicates))
+        else:
+            st.success("✅ No duplicate line numbers!")
 
+        fix_missing = st.checkbox("🛠️ Fix missing lines", value=True)
+        fix_duplicates = st.checkbox("🔁 Fix duplicate lines", value=True)
+
+        if fix_missing or fix_duplicates:
+            if st.button("⚒️ Apply Fixes and Generate New File"):
+                fixed_doc = fix_doc(lines, fix_missing=fix_missing, fix_duplicates=fix_duplicates)
                 buffer = generate_download_link(fixed_doc)
+
+                st.success("✅ Fixes applied.")
                 st.download_button(
                     label="📥 Download Fixed DOCX",
                     data=buffer,
                     file_name="fixed_document.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-        else:
-            st.success("✅ All line numbers are present and in sequence!")
 
 if __name__ == "__main__":
     main()
