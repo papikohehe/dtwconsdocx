@@ -1,58 +1,84 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
+from docx import Document
+import re
+from io import BytesIO
 
-def duckduckgo_search(query):
-    url = "https://html.duckduckgo.com/html/"
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": "https://html.duckduckgo.com/html/",
-    }
-    data = {"q": query}
+def extract_line_numbers(doc):
+    line_numbers = []
+    for para in doc.paragraphs:
+        match = re.match(r'^L(\d{1,3})', para.text.strip())
+        if match:
+            line_numbers.append(int(match.group(1)))
+    return sorted(set(line_numbers))
 
-    try:
-        res = requests.post(url, headers=headers, data=data, timeout=10)
+def find_missing_numbers(line_numbers):
+    missing = []
+    if not line_numbers:
+        return missing
+    for expected in range(line_numbers[0], line_numbers[-1] + 1):
+        if expected not in line_numbers:
+            missing.append(expected)
+    return missing
 
-        if res.status_code != 200 or "captcha" in res.text.lower():
-            st.warning("Blocked by DuckDuckGo or CAPTCHA detected.")
-            return []
+def insert_missing_lines(doc, missing_numbers):
+    new_doc = Document()
+    all_paragraphs = list(doc.paragraphs)
+    current_idx = 0
 
-        soup = BeautifulSoup(res.text, "html.parser")
+    for i in range(len(all_paragraphs)):
+        para = all_paragraphs[i]
+        match = re.match(r'^L(\d{1,3})', para.text.strip())
+        if match:
+            current_line_num = int(match.group(1))
+            while current_idx < len(missing_numbers) and missing_numbers[current_idx] < current_line_num:
+                new_doc.add_paragraph(f"L{missing_numbers[current_idx]}: << Missing Line >>")
+                current_idx += 1
+        new_doc.add_paragraph(para.text)
 
-        results = []
-        for result in soup.select(".result__a"):
-            title = result.text.strip()
-            href = result.get("href")
-            if title and href:
-                results.append({"title": title, "url": href})
+    # Add any missing at the end
+    while current_idx < len(missing_numbers):
+        new_doc.add_paragraph(f"L{missing_numbers[current_idx]}: << Missing Line >>")
+        current_idx += 1
 
-        return results
+    return new_doc
 
-    except Exception as e:
-        st.error(f"Search failed: {e}")
-        return []
+def generate_download_link(doc):
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 def main():
-    st.set_page_config(page_title="DuckDuckGo Search", page_icon="🔍")
-    st.title("🔍 DuckDuckGo Search (No API Key Required)")
+    st.title("📄 Line Number Checker & Auto-Fix for DOCX")
+    st.write("Upload a `.docx` file. We'll check for missing `L{number}` lines and optionally auto-fix them.")
 
-    query = st.text_input("Enter a search query:")
-    search_button = st.button("Search")
+    uploaded_file = st.file_uploader("Upload a DOCX file", type="docx")
 
-    if search_button and query:
-        with st.spinner("Searching..."):
-            results = duckduckgo_search(query)
+    if uploaded_file:
+        doc = Document(uploaded_file)
+        line_numbers = extract_line_numbers(doc)
+        missing = find_missing_numbers(line_numbers)
 
-        if results:
-            st.success(f"Found {len(results)} results:")
-            for i, result in enumerate(results, 1):
-                st.markdown(f"**{i}. [{result['title']}]({result['url']})**")
+        st.subheader("📋 Detected Line Numbers")
+        st.write([f"L{n}" for n in line_numbers])
+
+        if missing:
+            st.subheader("❌ Missing Line Numbers")
+            st.error(", ".join([f"L{m}" for m in missing]))
+
+            if st.button("🛠️ Auto-insert missing lines"):
+                fixed_doc = insert_missing_lines(doc, missing)
+                st.success("Missing lines inserted as placeholders.")
+
+                buffer = generate_download_link(fixed_doc)
+                st.download_button(
+                    label="📥 Download Fixed DOCX",
+                    data=buffer,
+                    file_name="fixed_document.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
         else:
-            st.warning("No results found or request was blocked.")
+            st.success("✅ All line numbers are present and in sequence!")
 
 if __name__ == "__main__":
     main()
